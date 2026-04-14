@@ -9,6 +9,7 @@
 
 #define MAX_CLIENTS 4
 #define PORT 8000
+#define SYMBOLS_PER_CARD 6
 
 // Struktura gracza
 typedef struct {
@@ -22,6 +23,7 @@ int client_count = 0;
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // SZYMON tu jest algorytm dający karty nie wiem jak go zrobic więc powodzenia 
+// chyba że jakos inaczej to wymyślisz powodzenia 
 void generate_deck_for_player(int player_id) {
     
     // Musisz wypełnić tablice kart gracza co późńiej idzie do niego 
@@ -39,6 +41,38 @@ void broadcast_lobby_status() {
             write(clients[i]->socket, buffer, strlen(buffer));
         }
     }
+    pthread_mutex_unlock(&clients_mutex);
+}
+
+// Funkcja do wysyłania informacji o nowej karcie na stole do wszystkich klientów za każdym razem gdy trafiona karta jest przez klienta 
+void broadcast_card_on_table(int *new_card) {
+    char buffer[256]; 
+    char temp[16];
+    
+    pthread_mutex_lock(&clients_mutex);
+    
+    // Początek wiadomości
+    strcpy(buffer, "CARD_ON_TABLE:");
+
+    // Doklejanie symboli z tablicy
+    for (int i = 0; i < SYMBOLS_PER_CARD; i++) {
+        if (i < SYMBOLS_PER_CARD - 1) {
+            sprintf(temp, "%d,", new_card[i]);
+        } else {
+            sprintf(temp, "%d", new_card[i]);
+        }
+        strcat(buffer, temp);
+    }
+    
+    strcat(buffer, "\n"); // Koniec linii dla klienta
+
+    // Wysłanie do wszystkich
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        if (clients[i] != NULL) {
+            write(clients[i]->socket, buffer, strlen(buffer));
+        }
+    }
+    
     pthread_mutex_unlock(&clients_mutex);
 }
 
@@ -61,18 +95,40 @@ void *connection_handler(void *arg) {
        Wysłanie tablicy kart po wywołaniu generate_deck_for_player() SZYMON
        Troche nie wiem jak przesłąć tablice kart ale jakoś to pójdzie no chyba że nie bezie miał gracz swoich kart tylko będą na serwerze 
     */
+   //to czeka nwm czy tego nie usunąć 
+    while(1) {
+        pthread_mutex_lock(&clients_mutex);
+        if (client_count >= MAX_CLIENTS) { 
+            pthread_mutex_unlock(&clients_mutex);
+            break; 
+        }
+        pthread_mutex_unlock(&clients_mutex);
+        usleep(100000); // Śpij 0.1s, żeby nie męczyć procesora
+    }
     sprintf(buffer, "GAME_START: Twoje karty: [MIEJSCE NA LOGIKE]\n");
     write(p->socket, buffer, strlen(buffer));
 
     // --- GŁÓWNA PĘTLA GRY ---
     while ((read_size = recv(p->socket, buffer, sizeof(buffer) - 1, 0)) > 0) {
         buffer[read_size] = '\0';
-
-        /* LOGIKA BROADCASTU KARTY ZE STOŁU
-           Jeśli klient przyśle dopasowanie, tutaj następuje walidacja
-           i ewentualny broadcast nowej karty stołu do wszystkich.
+        /*
+        if(buffer == oneofcardontable())
+        {
+             LOGIKA BROADCASTU KARTY ZE STOŁU
+            Jeśli klient przyśle dopasowanie, tutaj następuje walidacja
+            i ewentualny broadcast nowej karty stołu do wszystkich.
+            sprintf(buffer, "YOUR_CARDS: [MIEJSCE NA LOGIKE]\n");
+            write(p->socket, buffer, strlen(buffer));
+            to jest do odesłania jego kart nowych 
+            PLUS BROADCAST NOWEJ KARTY NA STOLE DO WSZYSTKICH
+            broadcast_card_on_table(new_card);
+        }
+        else{
+            sprintf(buffer, "NOT_ON_TABLE\n");
+            write(p->socket, buffer, strlen(buffer));
+        }
         */
-        
+        usleep(40000);
         // Tymczasowy log dla testów
         printf("Gracz %d wysłał ruch: %s", p->id, buffer);
         
@@ -94,6 +150,8 @@ void *connection_handler(void *arg) {
 }
 
 int main() {
+
+    //to jest prawie to co w templatce ale dodałem tam logikę związaną z ograniczeniem liczby graczy tak o 
     int listenfd, connfd;
     struct sockaddr_in serv_addr;
     pthread_t thread_id;
