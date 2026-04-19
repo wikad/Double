@@ -10,6 +10,10 @@
 #define MAX_CLIENTS 4
 #define PORT 8000
 #define SYMBOLS_PER_CARD 6
+#define CARDS_PER_PLAYER 10
+
+int player_cards[MAX_CLIENTS][CARDS_PER_PLAYER][SYMBOLS_PER_CARD]; //id gracza, numer karty, symbol na karcie
+int table_card[SYMBOLS_PER_CARD]; // karta w centrum stolu
 
 // Struktura gracza
 typedef struct {
@@ -24,9 +28,13 @@ pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // SZYMON tu jest algorytm dający karty nie wiem jak go zrobic więc powodzenia 
 // chyba że jakos inaczej to wymyślisz powodzenia 
-void generate_deck_for_player(int player_id) {
+void generate_deck_for_player(int player_id) { //tesowe losowanie kart trzeba zmienic na cos madzrezjszego
     
-    // Musisz wypełnić tablice kart gracza co późńiej idzie do niego 
+     for (int i = 0; i < CARDS_PER_PLAYER; i++) {
+        for (int j = 0; j < SYMBOLS_PER_CARD; j++) {
+            player_cards[player_id][i][j] = rand() % 50;
+        }
+    } 
 }
 
 // Funkcja do wysyłania wiadomości do wszystkich o oczekiwaniu w lobby taki starterek
@@ -42,6 +50,22 @@ void broadcast_lobby_status() {
         }
     }
     pthread_mutex_unlock(&clients_mutex);
+}
+
+void send_player_cards(player_t *p) { //format wysylanej wiadomosci 1,2,3,4,5,|3,5,2,1,3| 
+    char buffer[512] = "YOUR_CARDS:";
+
+    for (int i = 0; i < CARDS_PER_PLAYER; i++) {
+        for (int j = 0; j < SYMBOLS_PER_CARD; j++) {
+            char tmp[16];
+            sprintf(tmp, "%d,", player_cards[p->id][i][j]);
+            strcat(buffer, tmp);
+        }
+        strcat(buffer, "|");
+    }
+    strcat(buffer, "\n");
+
+    write(p->socket, buffer, strlen(buffer));
 }
 
 // Funkcja do wysyłania informacji o nowej karcie na stole do wszystkich klientów za każdym razem gdy trafiona karta jest przez klienta 
@@ -75,7 +99,15 @@ void broadcast_card_on_table(int *new_card) {
     
     pthread_mutex_unlock(&clients_mutex);
 }
-
+int symbol_matches_table(int symbol)
+{
+    for(int i=0; i<SYMBOLS_PER_CARD; i++)
+    {
+        if(table_card[i]==symbol)
+            return 1;
+    }
+    return 0;
+}
 void *connection_handler(void *arg) {
     player_t *p = (player_t *)arg;
     char buffer[2048];
@@ -96,6 +128,8 @@ void *connection_handler(void *arg) {
        Troche nie wiem jak przesłąć tablice kart ale jakoś to pójdzie no chyba że nie bezie miał gracz swoich kart tylko będą na serwerze 
     */
    //to czeka nwm czy tego nie usunąć 
+   generate_deck_for_player(p->id); //generacja decku
+   send_player_cards(p); //wysylanie kart do graczy
     while(1) {
         pthread_mutex_lock(&clients_mutex);
         if (client_count >= MAX_CLIENTS) { 
@@ -128,6 +162,18 @@ void *connection_handler(void *arg) {
             write(p->socket, buffer, strlen(buffer));
         }
         */
+
+        if (strncmp(buffer, "PLAY:", 5) == 0) {
+        int symbol = atoi(buffer + 5);
+
+        if (symbol_matches_table(symbol)) {
+            
+            broadcast_card_on_table(new_card); //pomysl jak dac nowa karte
+        } else {
+            write(p->socket, "NOT_ON_TABLE\n", 13);
+        }
+    }
+
         usleep(40000);
         // Tymczasowy log dla testów
         printf("Gracz %d wysłał ruch: %s", p->id, buffer);
