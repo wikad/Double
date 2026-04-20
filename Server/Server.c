@@ -9,17 +9,23 @@
 
 #define MAX_CLIENTS 4
 #define PORT 8000
-#define SYMBOLS_PER_CARD 6
 #define CARDS_PER_PLAYER 10
+
+ 
+#define N 7
+#define MAX_SYMBOLS (N*N + N + 1)
+#define CARDS (N*N + N + 1)
+#define SYMBOLS_PER_CARD (N + 1)
 
 int player_cards[MAX_CLIENTS][CARDS_PER_PLAYER][SYMBOLS_PER_CARD]; //id gracza, numer karty, symbol na karcie
 int table_card[SYMBOLS_PER_CARD]; // karta w centrum stolu
-
+int cards[CARDS][SYMBOLS_PER_CARD];
 // Struktura gracza
 typedef struct {
     int socket;
     int id;
     int is_ready;
+    int used_cards;
 } player_t;
 
 player_t *clients[MAX_CLIENTS];
@@ -28,13 +34,53 @@ pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // SZYMON tu jest algorytm dający karty nie wiem jak go zrobic więc powodzenia 
 // chyba że jakos inaczej to wymyślisz powodzenia 
-void generate_deck_for_player(int player_id) { //tesowe losowanie kart trzeba zmienic na cos madzrezjszego
-    
-     for (int i = 0; i < CARDS_PER_PLAYER; i++) {
-        for (int j = 0; j < SYMBOLS_PER_CARD; j++) {
-            player_cards[player_id][i][j] = rand() % 50;
+int cards[CARDS][SYMBOLS_PER_CARD];
+
+void generate_dobble() {
+
+    int i, j, k;
+
+    int card_index = 0;
+
+    for (i = 0; i < N + 1; i++) {
+
+        cards[card_index][0] = 1;
+
+        for (j = 0; j < N; j++) {
+            cards[card_index][j + 1] = (j + 1) + (i * N) + 1;
         }
-    } 
+
+        card_index++;
+    }
+
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < N; j++) {
+
+            cards[card_index][0] = i + 2;
+
+            for (k = 0; k < N; k++) {
+
+                int val = (N + 1 + N * k + (i * k + j) % N) + 1;
+
+                cards[card_index][k + 1] = val;
+            }
+
+            card_index++;
+        }
+    }
+}
+
+void generate_deck_for_player(int player_id) { 
+    
+    int start = player_id * CARDS_PER_PLAYER;
+
+    for (int i = 0; i < CARDS_PER_PLAYER; i++) {
+
+        for (int j = 0; j < SYMBOLS_PER_CARD; j++) {
+
+            player_cards[player_id][i][j] =cards[start + i][j];
+        }
+    }
 }
 
 // Funkcja do wysyłania wiadomości do wszystkich o oczekiwaniu w lobby taki starterek
@@ -66,6 +112,12 @@ void send_player_cards(player_t *p) { //format wysylanej wiadomosci 1,2,3,4,5,|3
     strcat(buffer, "\n");
 
     write(p->socket, buffer, strlen(buffer));
+}
+void generate_table_card()
+{
+    for (int i = 0; i < SYMBOLS_PER_CARD; i++) {
+        table_card[i] = cards[0][i];
+    }
 }
 
 // Funkcja do wysyłania informacji o nowej karcie na stole do wszystkich klientów za każdym razem gdy trafiona karta jest przez klienta 
@@ -108,6 +160,7 @@ int symbol_matches_table(int symbol)
     }
     return 0;
 }
+
 void *connection_handler(void *arg) {
     player_t *p = (player_t *)arg;
     char buffer[2048];
@@ -128,8 +181,8 @@ void *connection_handler(void *arg) {
        Troche nie wiem jak przesłąć tablice kart ale jakoś to pójdzie no chyba że nie bezie miał gracz swoich kart tylko będą na serwerze 
     */
    //to czeka nwm czy tego nie usunąć 
-   generate_deck_for_player(p->id); //generacja decku
-   send_player_cards(p); //wysylanie kart do graczy
+   
+   
     while(1) {
         pthread_mutex_lock(&clients_mutex);
         if (client_count >= MAX_CLIENTS) { 
@@ -168,7 +221,12 @@ void *connection_handler(void *arg) {
 
         if (symbol_matches_table(symbol)) {
             
-            broadcast_card_on_table(new_card); //pomysl jak dac nowa karte
+            for (int i=0; i<SYMBOLS_PER_CARD; i++)
+            {
+                table_card[i]=player_cards[p->id][p->used_cards][i];
+            }
+            p->used_cards++;
+            broadcast_card_on_table(table_card); 
         } else {
             write(p->socket, "NOT_ON_TABLE\n", 13);
         }
@@ -212,6 +270,8 @@ int main() {
 
     printf("Serwer gry Double uruchomiony na porcie %d...\n", PORT);
 
+    int game_started=0; //wartownik
+
     while (1) {
         connfd = accept(listenfd, (struct sockaddr *)NULL, NULL);
         
@@ -233,6 +293,26 @@ int main() {
             new_player->id = found_slot;
             clients[found_slot] = new_player;
             client_count++;
+            new_player->used_cards = 0;
+            //rozpoczecie gry generacja kart dla graczy na stół i wysłanie kart
+            if (client_count == MAX_CLIENTS && !game_started) {
+
+                game_started = 1;
+                printf("START GRY!\n");
+
+                generate_dobble(); //generacja wszystkich kart
+
+                generate_table_card(); // generacja karty na stole
+
+                broadcast_card_on_table(table_card);
+
+                // wyślij karty graczy
+                for (int i = 0; i < MAX_CLIENTS; i++) {
+                    if (clients[i] != NULL) {
+                        send_player_cards(clients[i]);
+                    }
+                }
+            }
             
             pthread_create(&thread_id, NULL, connection_handler, (void *)new_player);
         } else {
