@@ -7,6 +7,17 @@
 #include <string.h>
 #include <pthread.h>
 
+
+// flow jest takie:
+// KLIENT DOSTAJE ID 
+// OCZEKIWANIE NA WSZYSTKICH GRACZY
+//  generuje się deck 
+// WYSŁANIE KART WSZYSTKICH 
+// ROZSYŁANIE KARTY NA STOLE LUB ODEBRANIE KARTY DOBRZE TRAFIONEJ TO TRZEBA JESZCZE DOROBIĆ CZY JEST TRAFIONA    
+// chyba !!!!
+
+
+
 #define MAX_CLIENTS 4
 #define PORT 8000
 #define CARDS_PER_PLAYER 10
@@ -32,8 +43,6 @@ player_t *clients[MAX_CLIENTS];
 int client_count = 0;
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-// SZYMON tu jest algorytm dający karty nie wiem jak go zrobic więc powodzenia 
-// chyba że jakos inaczej to wymyślisz powodzenia 
 int cards[CARDS][SYMBOLS_PER_CARD];
 
 void generate_dobble() {
@@ -97,7 +106,7 @@ void broadcast_lobby_status() {
     }
     pthread_mutex_unlock(&clients_mutex);
 }
-
+// wysyła karte gracza kurwa jednak wysyła wszystkie karty gracza jakie ma 
 void send_player_cards(player_t *p) { //format wysylanej wiadomosci 1,2,3,4,5,|3,5,2,1,3| 
     char buffer[512] = "YOUR_CARDS:";
 
@@ -113,6 +122,8 @@ void send_player_cards(player_t *p) { //format wysylanej wiadomosci 1,2,3,4,5,|3
 
     write(p->socket, buffer, strlen(buffer));
 }
+
+// wybiera karte na stół
 void generate_table_card()
 {
     for (int i = 0; i < SYMBOLS_PER_CARD; i++) {
@@ -151,6 +162,7 @@ void broadcast_card_on_table(int *new_card) {
     
     pthread_mutex_unlock(&clients_mutex);
 }
+// czy katra graczy = karta na stole
 int symbol_matches_table(int symbol)
 {
     for(int i=0; i<SYMBOLS_PER_CARD; i++)
@@ -169,20 +181,8 @@ void *connection_handler(void *arg) {
     // --- HANDSHAKE 1: Nadanie ID ---
     sprintf(buffer, "WELCOME: Twoje ID to %d\n", p->id);
     write(p->socket, buffer, strlen(buffer));
-
-    // Informujemy wszystkich o nowym graczu
-    broadcast_lobby_status();
-
-    // Symulacja oczekiwania na start gry (np. gdy uzbiera się 2 graczy)
-    //W grze musi być oczekiwanie na drugi handshake 
-    
-    /* --- HANDSHAKE 2: Start gry ---
-       Wysłanie tablicy kart po wywołaniu generate_deck_for_player() SZYMON
-       Troche nie wiem jak przesłąć tablice kart ale jakoś to pójdzie no chyba że nie bezie miał gracz swoich kart tylko będą na serwerze 
-    */
-   //to czeka nwm czy tego nie usunąć 
    
-   
+   //oczekiwanie na maks graczy
     while(1) {
         pthread_mutex_lock(&clients_mutex);
         if (client_count >= MAX_CLIENTS) { 
@@ -192,30 +192,17 @@ void *connection_handler(void *arg) {
         pthread_mutex_unlock(&clients_mutex);
         usleep(100000); // Śpij 0.1s, żeby nie męczyć procesora
     }
-    sprintf(buffer, "GAME_START: Twoje karty: [MIEJSCE NA LOGIKE]\n");
-    write(p->socket, buffer, strlen(buffer));
+
+
+    // wysyłanie pierwszej karty 
+    generate_deck_for_player(p->id); // to generuje każdemu deck  cały czyli tam ileś kart 
+    send_player_cards(p);
 
     // --- GŁÓWNA PĘTLA GRY ---
     while ((read_size = recv(p->socket, buffer, sizeof(buffer) - 1, 0)) > 0) {
         buffer[read_size] = '\0';
-        /*
-        if(buffer == oneofcardontable())
-        {
-             LOGIKA BROADCASTU KARTY ZE STOŁU
-            Jeśli klient przyśle dopasowanie, tutaj następuje walidacja
-            i ewentualny broadcast nowej karty stołu do wszystkich.
-            sprintf(buffer, "YOUR_CARDS: [MIEJSCE NA LOGIKE]\n");
-            write(p->socket, buffer, strlen(buffer));
-            to jest do odesłania jego kart nowych 
-            PLUS BROADCAST NOWEJ KARTY NA STOLE DO WSZYSTKICH
-            broadcast_card_on_table(new_card);
-        }
-        else{
-            sprintf(buffer, "NOT_ON_TABLE\n");
-            write(p->socket, buffer, strlen(buffer));
-        }
-        */
-
+      
+        // sprawdza info od gracza gracz odsyła tylko ifo o symbolu na karcie server trackuje na której jest i gra w pythonie tez powinna 
         if (strncmp(buffer, "PLAY:", 5) == 0) {
         int symbol = atoi(buffer + 5);
 
@@ -226,7 +213,9 @@ void *connection_handler(void *arg) {
                 table_card[i]=player_cards[p->id][p->used_cards][i];
             }
             p->used_cards++;
+            write(p->socket, "HIT\n", 4);
             broadcast_card_on_table(table_card); 
+
         } else {
             write(p->socket, "NOT_ON_TABLE\n", 13);
         }
@@ -277,7 +266,7 @@ int main() {
         
         pthread_mutex_lock(&clients_mutex);
         
-        // Taki komunikat zrobiony jest na szybko żeby jak nie będzie miejsca to klient dostanie info że serwer jest pełny i się rozłączy
+        //czy mieści się gracz
         int found_slot = -1;
         for (int i = 0; i < MAX_CLIENTS; i++) {
             if (clients[i] == NULL) {
@@ -285,7 +274,9 @@ int main() {
                 break;
             }
         }
-
+            
+        
+        // czy gra się zaczyna
         if (found_slot != -1) {
             // Jest miejsce - tworzymy gracza
             player_t *new_player = malloc(sizeof(player_t));
@@ -294,6 +285,15 @@ int main() {
             clients[found_slot] = new_player;
             client_count++;
             new_player->used_cards = 0;
+
+            //tworzy wątek gracz
+            pthread_create(&thread_id, NULL, connection_handler, (void *)new_player);
+
+            // Informujemy wszystkich o nowym graczu
+            broadcast_lobby_status();
+
+            
+
             //rozpoczecie gry generacja kart dla graczy na stół i wysłanie kart
             if (client_count == MAX_CLIENTS && !game_started) {
 
@@ -305,17 +305,11 @@ int main() {
                 generate_table_card(); // generacja karty na stole
 
                 broadcast_card_on_table(table_card);
+                
 
-                // wyślij karty graczy
-                for (int i = 0; i < MAX_CLIENTS; i++) {
-                    if (clients[i] != NULL) {
-                        send_player_cards(clients[i]);
-                    }
-                }
             }
-            
-            pthread_create(&thread_id, NULL, connection_handler, (void *)new_player);
-        } else {
+        } 
+        else {
             // BRAK MIEJSCA
             char *msg = "ERROR: Serwer jest pelny. Sprobuj pozniej.\n";
             write(connfd, msg, strlen(msg));

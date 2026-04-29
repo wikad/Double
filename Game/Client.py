@@ -1,8 +1,6 @@
 import socket
 import threading
 
-#SSZYMON NIE PATRZ NA EXCEPT TO SIE KOD PRSOTY I NIE SKĄPLIKOWANY ROBI 
-
 
 class GameClient:
     def __init__(self, host='127.0.0.1', port=8000):
@@ -12,7 +10,7 @@ class GameClient:
         self.my_id = None
         self.is_connected = False
         self.myCards = [] # Tu możesz przechowywać twoje karty
-        self.tableCards = [] # Tu możesz przechowywać karty na stole
+        self.tableCard = [] # Tu możesz przechowywać karty na stole
 
     def connect(self):
         """Inicjalizuje socket i łączy z serwerem."""
@@ -30,30 +28,18 @@ class GameClient:
             print(f"Błąd połączenia: {e}")
             return False
 
-    def wait_for_lobby(self):
-        """Pętla oczekiwania na start gry (Handshake 2)."""
-        print("Oczekiwanie na graczy w lobby...")
-        while self.is_connected:
-            data = self.receive_data()
-            print(f"Serwer: {data}")
-            
-            if "GAME_START" in data:
-                print("Gra właśnie się rozpoczęła!")
-                self.extract_cards_from_message(data)
-                break
-
+    # wyciaganie kart z wiadomosci 
     def extract_cards_from_message(self, message):
         """Przykłądowa funkcja która wyciąga karty z data"""
-        if "Twoje karty:" in message:
+        if "YOUR_CARDS:" in message:
             try:
-                cards_part = message.split(",")[-1].strip()
-
-                print(f"Zapisano karty do tablicy: {cards_part}")
-                self.myCards = cards_part # Przykładowe rozdzielenie kart do listy
+                pass # zrobic pasrowanie kart z wiadomośći do myCards
             except:
                 print("Nie udało się sparsować kart.")
 
+    #odbiera data od serwera 
     def receive_data(self):
+
         """Odbiera dane wrzuca je do karta na stole."""
         while(1):
             if not self.is_connected:
@@ -62,20 +48,26 @@ class GameClient:
                 data = self.sock.recv(2048).decode('utf-8')
                 if (data):
                     if "CARD_ON_TABLE:" in data:
-                        self.tableCards = data.split(":")[1].strip() # Przykładowe rozdzielenie kart na stole
-                        print(f"Aktualizacja kart na stole: {self.tableCards}")
+                        print(f"karta na stole {data}")
                     if "GAME_END" in data:
                         print("Gra zakończona!")
                         self.is_connected = False
                     if "NOT_ON_TABLE" in data:
                         print("Nie masz tego symbolu na karcie na stole!")
-                    
+                    if "HIT" in data:
+                        print("karta trafiona")
+                    if "YOUR_CARDS:" in data: # to jest wiadomość startowa 
+                        self.extract_cards_from_message(data)
+                    if "LOBBY_UPDATE:" in data:
+                        print(f"oczekiwanie na graczy {data}")
             except:
                 self.is_connected = False
                 return
 
     def send_move(self, move_str):
         """Wysyła ruch gracza do serwera."""
+
+        # to musi być waidomość PLAY: 6 na przykład to nie jest zroibone 
         if self.is_connected:
             try:
                 self.sock.sendall(move_str.encode('utf-8'))
