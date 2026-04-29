@@ -43,7 +43,6 @@ player_t *clients[MAX_CLIENTS];
 int client_count = 0;
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-int cards[CARDS][SYMBOLS_PER_CARD];
 
 void generate_dobble() {
 
@@ -173,6 +172,21 @@ int symbol_matches_table(int symbol)
     return 0;
 }
 
+int symbol_matches_player_card(player_t *p, int symbol)
+{
+    if (p->used_cards >= CARDS_PER_PLAYER) {
+        return 0;
+    }
+
+    for (int i = 0; i < SYMBOLS_PER_CARD; i++) {
+        if (player_cards[p->id][p->used_cards][i] == symbol) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 void *connection_handler(void *arg) {
     player_t *p = (player_t *)arg;
     char buffer[2048];
@@ -204,22 +218,29 @@ void *connection_handler(void *arg) {
       
         // sprawdza info od gracza gracz odsyła tylko ifo o symbolu na karcie server trackuje na której jest i gra w pythonie tez powinna 
         if (strncmp(buffer, "PLAY:", 5) == 0) {
-        int symbol = atoi(buffer + 5);
+            int symbol = atoi(buffer + 5);
+            int hit = 0;
+            int card_to_broadcast[SYMBOLS_PER_CARD];
 
-        if (symbol_matches_table(symbol)) {
-            
-            for (int i=0; i<SYMBOLS_PER_CARD; i++)
-            {
-                table_card[i]=player_cards[p->id][p->used_cards][i];
+            pthread_mutex_lock(&clients_mutex);
+            if (symbol_matches_table(symbol) && symbol_matches_player_card(p, symbol)) {
+                for (int i=0; i<SYMBOLS_PER_CARD; i++)
+                {
+                    table_card[i]=player_cards[p->id][p->used_cards][i];
+                    card_to_broadcast[i]=table_card[i];
+                }
+                p->used_cards++;
+                hit = 1;
             }
-            p->used_cards++;
-            write(p->socket, "HIT\n", 4);
-            broadcast_card_on_table(table_card); 
+            pthread_mutex_unlock(&clients_mutex);
 
-        } else {
-            write(p->socket, "NOT_ON_TABLE\n", 13);
+            if (hit) {
+                write(p->socket, "HIT\n", 4);
+                broadcast_card_on_table(card_to_broadcast); 
+            } else {
+                write(p->socket, "NOT_ON_TABLE\n", 13);
+            }
         }
-    }
 
         usleep(40000);
         // Tymczasowy log dla testów
@@ -250,12 +271,34 @@ int main() {
     pthread_t thread_id;
 
     listenfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (listenfd < 0) {
+        perror("socket");
+        return 1;
+    }
+
+    int opt = 1;
+    if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+        perror("setsockopt");
+        close(listenfd);
+        return 1;
+    }
+
+    memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     serv_addr.sin_port = htons(PORT);
 
-    bind(listenfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
-    listen(listenfd, 10);
+    if (bind(listenfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+        perror("bind");
+        close(listenfd);
+        return 1;
+    }
+
+    if (listen(listenfd, 10) < 0) {
+        perror("listen");
+        close(listenfd);
+        return 1;
+    }
 
     printf("Serwer gry Double uruchomiony na porcie %d...\n", PORT);
 
@@ -263,6 +306,13 @@ int main() {
 
     while (1) {
         connfd = accept(listenfd, (struct sockaddr *)NULL, NULL);
+        if (connfd < 0) {
+            perror("accept");
+            continue;
+        }
+
+        int should_broadcast_lobby = 0;
+        int should_start_game = 0;
         
         pthread_mutex_lock(&clients_mutex);
         
@@ -288,25 +338,20 @@ int main() {
 
             //tworzy wątek gracz
             pthread_create(&thread_id, NULL, connection_handler, (void *)new_player);
+            pthread_detach(thread_id);
 
             // Informujemy wszystkich o nowym graczu
-            broadcast_lobby_status();
-
-            
+            should_broadcast_lobby = 1;
 
             //rozpoczecie gry generacja kart dla graczy na stół i wysłanie kart
             if (client_count == MAX_CLIENTS && !game_started) {
 
                 game_started = 1;
-                printf("START GRY!\n");
-
                 generate_dobble(); //generacja wszystkich kart
 
                 generate_table_card(); // generacja karty na stole
 
-                broadcast_card_on_table(table_card);
-                
-
+                should_start_game = 1;
             }
         } 
         else {
@@ -318,6 +363,15 @@ int main() {
         }
         
         pthread_mutex_unlock(&clients_mutex);
+
+        if (should_broadcast_lobby) {
+            broadcast_lobby_status();
+        }
+
+        if (should_start_game) {
+            printf("START GRY!\n");
+            broadcast_card_on_table(table_card);
+        }
     }
 
     return 0;
