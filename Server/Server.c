@@ -18,7 +18,7 @@
 
 
 
-#define MAX_CLIENTS 4
+#define MAX_CLIENTS 2
 #define PORT 8000
 #define CARDS_PER_PLAYER 10
 
@@ -193,7 +193,7 @@ void *connection_handler(void *arg) {
     int read_size;
 
     // --- HANDSHAKE 1: Nadanie ID ---
-    sprintf(buffer, "WELCOME: Twoje ID to %d\n", p->id);
+    sprintf(buffer, "WELCOME:%d\n", p->id);
     write(p->socket, buffer, strlen(buffer));
    
    //oczekiwanie na maks graczy
@@ -235,6 +235,21 @@ void *connection_handler(void *arg) {
             pthread_mutex_unlock(&clients_mutex);
 
             if (hit) {
+                if (p->used_cards >= CARDS_PER_PLAYER) {
+                    char win_msg[64];
+                    sprintf(win_msg, "GAME_END:%d", p->id);
+                    
+                    // Powiadom wszystkich o końcu gry
+                    pthread_mutex_lock(&clients_mutex);
+                    for (int i = 0; i < MAX_CLIENTS; i++) {
+                        if (clients[i] != NULL) {
+                            write(clients[i]->socket, win_msg, strlen(win_msg));
+                        }
+                    }
+                    pthread_mutex_unlock(&clients_mutex);
+                    
+                    // Tutaj można dodać flagę kończącą pętle wątków
+                }
                 write(p->socket, "HIT\n", 4);
                 broadcast_card_on_table(card_to_broadcast); 
             } else {
