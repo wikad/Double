@@ -11,18 +11,16 @@ class GameClient:
         self.is_connected = False
         self.myCards = [] # Tu możesz przechowywać twoje karty
         self.tableCard = [] # Tu możesz przechowywać karty na stole
-
+        self.winner_id = None
+        self.obecna_karta = 0
+        self.current_players =0
+        self.max_players =0
     def connect(self):
         """Inicjalizuje socket i łączy z serwerem."""
         try:
             self.sock.connect((self.host, self.port))
             self.is_connected = True
             
-            # Odbierz pierwszy komunikat: WELCOME (Handshake 1)
-            data = self.receive_data()
-            if "WELCOME" in data:
-                self.my_id = int(data.split()[-1])
-                print(f"Połączono! Moje ID to: {self.my_id}")
             return True
         except Exception as e:
             print(f"Błąd połączenia: {e}")
@@ -30,12 +28,19 @@ class GameClient:
 
     # wyciaganie kart z wiadomosci 
     def extract_cards_from_message(self, message):
-        """Przykłądowa funkcja która wyciąga karty z data"""
         if "YOUR_CARDS:" in message:
             try:
-                pass # zrobic pasrowanie kart z wiadomośći do myCards
-            except:
-                print("Nie udało się sparsować kart.")
+                raw_data = message.replace("YOUR_CARDS:", "").strip()
+                card_strings = list(filter(None, raw_data.split('|')))
+                new_cards = []
+                for card_str in card_strings:
+                    if card_str.strip():
+                        symbols = [int(s.strip()) for s in card_str.split(',') if s.strip()]
+                        new_cards.append(symbols)
+                self.myCards = new_cards
+                print(f"Pomyślnie sparsowano {len(self.myCards)} kart.")
+            except Exception as e:
+                print(f"Nie udało się sparsować kart. Błąd: {e}")
 
     #odbiera data od serwera 
     def receive_data(self):
@@ -47,33 +52,55 @@ class GameClient:
             try:# coś takiego to by wyglądało żeby przypisać odebrane karty do tablicy 
                 data = self.sock.recv(2048).decode('utf-8')
                 if (data):
+                    if "WELCOME:" in data:
+                        self.my_id = int(data.split(":")[-1].strip())
+                        print(f"Otrzymałem ID gracza: {self.my_id}")
                     if "CARD_ON_TABLE:" in data:
-                        print(f"karta na stole {data}")
-                    if "GAME_END" in data:
+                        try:
+                            raw_card = data.split("CARD_ON_TABLE:")[-1].strip()
+                            self.tableCard = [int(s.strip()) for s in raw_card.split(',') if s.strip()]
+                            print(f"Zaktualizowano kartę na stole: {self.tableCard}")
+                        except Exception as e:
+                            print(f"Błąd parsowania karty na stole: {e}")
+                        pass
+                    if "GAME_END:" in data:
+                        # przekazanie do gui że gra się zakończyła
+                        self.winner_id = int(data.split(":")[-1].strip())
+                        print(f"KONIEC GRY. Zwycięzca: {self.winner_id}")
                         print("Gra zakończona!")
                         self.is_connected = False
-                    if "NOT_ON_TABLE" in data:
-                        print("Nie masz tego symbolu na karcie na stole!")
-                    if "HIT" in data:
-                        print("karta trafiona")
-                    if "YOUR_CARDS:" in data: # to jest wiadomość startowa 
-                        self.extract_cards_from_message(data)
+                    if "NOT_ON_TABLE:" in data:
+                        # przekazanie do gui że nie udało sie trafic karty 
+                        # wywołanie czegos z gui będzie trzeba przekazać obiek gui 
+                        pass
+                    if "HIT:" in data:
+                        #karta trafiona nowa karta jako obecna gracza z mycards
+                        # wywołanie czegos z gui będzie trzeba przekazać obiek gui
+                        self.obecna_karta += 1 
+                        pass
+                    if "YOUR_CARDS:" in data: # to jest wiadomość startowa z kartami gracza
+                        self.extract_cards_from_message(data) # mam nadzieje że działa
+                        print(f"Otrzymałem karty: {self.myCards}")
                     if "LOBBY_UPDATE:" in data:
-                        print(f"oczekiwanie na graczy {data}")
+                        ratio_part = data.split()[-1] 
+                        current_str, max_str = ratio_part.split('/')
+                        self.current_players = int(current_str)
+                        self.max_players = int(max_str)
+                        #przekazać to do gui narazie forma debugowania 
+                        
+                        pass
+                    if "ERROR:" in data:
+                        print("error")
+                        return 
+                        pass #brak miejsca w lobby
             except:
                 self.is_connected = False
                 return
 
     def send_move(self, move_str):
-        """Wysyła ruch gracza do serwera."""
-
-        # to musi być waidomość PLAY: 6 na przykład to nie jest zroibone 
-        if self.is_connected:
-            try:
-                self.sock.sendall(move_str.encode('utf-8'))
-            except Exception as e:
-                print(f"Błąd wysyłania: {e}")
-                self.is_connected = False
+        message = f"PLAY:{move_str}\n" 
+        self.sock.sendall(message.encode('utf-8'))
+        print(f"Wysłano ruch: {message.strip()}")
 
     def close(self):
         self.sock.close()
