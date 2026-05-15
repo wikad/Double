@@ -18,7 +18,7 @@
 
 
 
-#define MAX_CLIENTS 2
+#define MAX_CLIENTS 3
 #define PORT 8000
 #define CARDS_PER_PLAYER 10
 
@@ -210,6 +210,15 @@ void *connection_handler(void *arg) {
 
     // wysyłanie pierwszej karty 
     generate_deck_for_player(p->id); // to generuje każdemu deck  cały czyli tam ileś kart 
+    for(int i=0; i<CARDS_PER_PLAYER; i++)
+    {
+        printf("Gracz %d karta %d: ", p->id, i);
+        for(int j=0; j<SYMBOLS_PER_CARD; j++)
+        {
+            printf("%d ", player_cards[p->id][i][j]);
+        }
+        printf("\n");
+    }
     send_player_cards(p);
 
     // --- GŁÓWNA PĘTLA GRY ---
@@ -250,10 +259,10 @@ void *connection_handler(void *arg) {
                     
                     // Tutaj można dodać flagę kończącą pętle wątków
                 }
-                write(p->socket, "HIT\n", 4);
+                write(p->socket, "HIT:\n", 4);
                 broadcast_card_on_table(card_to_broadcast); 
             } else {
-                write(p->socket, "NOT_ON_TABLE\n", 13);
+                write(p->socket, "NOT_ON_TABLE:\n", 13);
             }
         }
 

@@ -72,11 +72,13 @@ class GameClient:
                     if "NOT_ON_TABLE:" in data:
                         # przekazanie do gui że nie udało sie trafic karty 
                         # wywołanie czegos z gui będzie trzeba przekazać obiek gui 
+                        print("DUPA KURWO JEBANA")
                         pass
                     if "HIT:" in data:
                         #karta trafiona nowa karta jako obecna gracza z mycards
                         # wywołanie czegos z gui będzie trzeba przekazać obiek gui
                         self.obecna_karta += 1 
+                        print("JASNY GWINT TRAFIŁEŚ GNOJU")
                         pass
                     if "YOUR_CARDS:" in data: # to jest wiadomość startowa z kartami gracza
                         self.extract_cards_from_message(data) # mam nadzieje że działa
