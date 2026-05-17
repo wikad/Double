@@ -15,6 +15,7 @@ print("Połączono z serwerem")
 table_card = []
 my_cards = []
 current_card_index = 0
+game_running = True
 
 lock = threading.Lock()
 
@@ -51,11 +52,19 @@ def handle_hit():
         print(f"✅ Trafione, następna karta: {current_card_index + 1}/{len(my_cards)}")
 
 
+def handle_game_end(msg):
+    global game_running
+    winner = msg.split(":")[1].strip()
+    with lock:
+        game_running = False
+    print(f"🏁 Koniec gry, wygrał gracz {winner}")
+
+
 # ----------- AI -----------
 
 def find_match():
     with lock:
-        if not table_card or current_card_index >= len(my_cards):
+        if not game_running or not table_card or current_card_index >= len(my_cards):
             return None
 
         for symbol in my_cards[current_card_index]:
@@ -93,8 +102,12 @@ def receiver():
                 elif line.startswith("YOUR_CARDS:"):
                     parse_cards(line)
 
-                elif line == "HIT":
+                elif line == "HIT:":
                     handle_hit()
+
+                elif line.startswith("GAME_END:"):
+                    handle_game_end(line)
+                    return
 
         except Exception as e:
             print("Błąd:", e)
@@ -103,10 +116,12 @@ def receiver():
 
 threading.Thread(target=receiver, daemon=True).start()
 
-while True:
+while game_running:
     time.sleep(0.5)
 
     symbol = find_match()
     if symbol is not None:
         play(symbol)
         time.sleep(0.3)  # żeby nie spamować za szybko
+
+sock.close()

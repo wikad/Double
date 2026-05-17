@@ -41,6 +41,8 @@ typedef struct {
 
 player_t *clients[MAX_CLIENTS];
 int client_count = 0;
+int game_over = 0;
+int winner_id = -1;
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
@@ -229,10 +231,12 @@ void *connection_handler(void *arg) {
         if (strncmp(buffer, "PLAY:", 5) == 0) {
             int symbol = atoi(buffer + 5);
             int hit = 0;
+            int game_ended = 0;
             int card_to_broadcast[SYMBOLS_PER_CARD];
+            int winning_player = -1;
 
             pthread_mutex_lock(&clients_mutex);
-            if (symbol_matches_table(symbol) && symbol_matches_player_card(p, symbol)) {
+            if (!game_over && symbol_matches_table(symbol) && symbol_matches_player_card(p, symbol)) {
                 for (int i=0; i<SYMBOLS_PER_CARD; i++)
                 {
                     table_card[i]=player_cards[p->id][p->used_cards][i];
@@ -240,13 +244,23 @@ void *connection_handler(void *arg) {
                 }
                 p->used_cards++;
                 hit = 1;
+
+                if (p->used_cards >= CARDS_PER_PLAYER) {
+                    game_over = 1;
+                    winner_id = p->id;
+                    winning_player = winner_id;
+                    game_ended = 1;
+                }
             }
             pthread_mutex_unlock(&clients_mutex);
 
             if (hit) {
-                if (p->used_cards >= CARDS_PER_PLAYER) {
+                write(p->socket, "HIT:\n", strlen("HIT:\n"));
+                broadcast_card_on_table(card_to_broadcast); 
+
+                if (game_ended) {
                     char win_msg[64];
-                    sprintf(win_msg, "GAME_END:%d", p->id);
+                    sprintf(win_msg, "GAME_END:%d\n", winning_player);
                     
                     // Powiadom wszystkich o końcu gry
                     pthread_mutex_lock(&clients_mutex);
@@ -256,13 +270,9 @@ void *connection_handler(void *arg) {
                         }
                     }
                     pthread_mutex_unlock(&clients_mutex);
-                    
-                    // Tutaj można dodać flagę kończącą pętle wątków
                 }
-                write(p->socket, "HIT:\n", 4);
-                broadcast_card_on_table(card_to_broadcast); 
-            } else {
-                write(p->socket, "NOT_ON_TABLE:\n", 13);
+            } else if (!game_over) {
+                write(p->socket, "NOT_ON_TABLE:\n", strlen("NOT_ON_TABLE:\n"));
             }
         }
 
