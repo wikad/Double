@@ -7,15 +7,21 @@
 #include <string.h>
 #include <pthread.h>
 
-
-// flow jest takie:
-// KLIENT DOSTAJE ID 
-// OCZEKIWANIE NA WSZYSTKICH GRACZY
-//  generuje się deck 
-// WYSŁANIE KART WSZYSTKICH 
-// ROZSYŁANIE KARTY NA STOLE LUB ODEBRANIE KARTY DOBRZE TRAFIONEJ TO TRZEBA JESZCZE DOROBIĆ CZY JEST TRAFIONA    
-// chyba !!!!
-
+/*
+ * Serwer gry Dobble (Double) dla 3 graczy.
+ *
+ * Przebieg:
+ *  1. Talia 57 kart jest generowana przy starcie (płaszczyzna rzutowa rzędu 7:
+ *     każde dwie karty mają DOKŁADNIE jeden wspólny symbol).
+ *  2. Klient po połączeniu dostaje ID (WELCOME), serwer rozsyła stan lobby.
+ *  3. Gdy jest komplet graczy, każdy dostaje 10 kart (YOUR_CARDS),
+ *     a na stół trafia karta spoza rozdania (CARD_ON_TABLE).
+ *  4. Gracz wysyła PLAY:<symbol>. Jeśli symbol jest i na stole, i na jego
+ *     bieżącej karcie, jego karta trafia na stół (HIT + CARD_ON_TABLE dla wszystkich).
+ *  5. Pierwszy gracz, który pozbędzie się wszystkich kart, wygrywa (GAME_END).
+ *
+ * Protokół tekstowy, jedna wiadomość = jedna linia zakończona '\n'.
+ */
 
 
 #define MAX_CLIENTS 3
@@ -28,9 +34,11 @@
 #define CARDS (N*N + N + 1)
 #define SYMBOLS_PER_CARD (N + 1)
 
-int player_cards[MAX_CLIENTS][CARDS_PER_PLAYER][SYMBOLS_PER_CARD]; //id gracza, numer karty, symbol na karcie
+int player_cards[MAX_CLIENTS][CARDS_PER_PLAYER][SYMBOLS_PER_CARD]; // [gracz][numer karty][symbol]
 int table_card[SYMBOLS_PER_CARD]; // karta w centrum stolu
 int cards[CARDS][SYMBOLS_PER_CARD];
+int game_over = 0;
+
 // Struktura gracza
 typedef struct {
     int socket;
@@ -42,6 +50,16 @@ typedef struct {
 player_t *clients[MAX_CLIENTS];
 int client_count = 0;
 pthread_mutex_t clients_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+// Wysyła cały bufor (write może wysłać tylko część danych)
+static void send_text(int sock, const char *msg, size_t len) {
+    while (len > 0) {
+        ssize_t n = write(sock, msg, len);
+        if (n <= 0) return;   // klient rozłączony - obsłuży to pętla recv
+        msg += n;
+        len -= (size_t)n;
+    }
+}
 
 
 void generate_dobble() {
@@ -78,7 +96,23 @@ void generate_dobble() {
     }
 }
 
-void generate_deck_for_player(int player_id) { 
+// Sprawdza własność talii: każda para kart ma dokładnie jeden wspólny symbol.
+// Zwraca liczbę par, które jej NIE spełniają (0 = talia poprawna).
+int verify_deck(void) {
+    int bad = 0;
+    for (int a = 0; a < CARDS; a++) {
+        for (int b = a + 1; b < CARDS; b++) {
+            int common = 0;
+            for (int i = 0; i < SYMBOLS_PER_CARD; i++)
+                for (int j = 0; j < SYMBOLS_PER_CARD; j++)
+                    if (cards[a][i] == cards[b][j]) common++;
+            if (common != 1) bad++;
+        }
+    }
+    return bad;
+}
+
+void generate_deck_for_player(int player_id) {
     
     int start = player_id * CARDS_PER_PLAYER;
 
@@ -91,7 +125,7 @@ void generate_deck_for_player(int player_id) {
     }
 }
 
-// Funkcja do wysyłania wiadomości do wszystkich o oczekiwaniu w lobby taki starterek
+// Rozsyła wszystkim stan lobby
 void broadcast_lobby_status() {
     char buffer[128];
     pthread_mutex_lock(&clients_mutex);
@@ -100,13 +134,13 @@ void broadcast_lobby_status() {
     
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i] != NULL) {
-            write(clients[i]->socket, buffer, strlen(buffer));
+            send_text(clients[i]->socket, buffer, strlen(buffer));
         }
     }
     pthread_mutex_unlock(&clients_mutex);
 }
-// wysyła karte gracza kurwa jednak wysyła wszystkie karty gracza jakie ma 
-void send_player_cards(player_t *p) { //format wysylanej wiadomosci 1,2,3,4,5,|3,5,2,1,3| 
+// Wysyła graczowi wszystkie jego karty. Format: YOUR_CARDS:1,2,3,...,|4,5,6,...,|...
+void send_player_cards(player_t *p) {
     char buffer[512] = "YOUR_CARDS:";
 
     for (int i = 0; i < CARDS_PER_PLAYER; i++) {
@@ -119,18 +153,18 @@ void send_player_cards(player_t *p) { //format wysylanej wiadomosci 1,2,3,4,5,|3
     }
     strcat(buffer, "\n");
 
-    write(p->socket, buffer, strlen(buffer));
+    send_text(p->socket, buffer, strlen(buffer));
 }
 
-// wybiera karte na stół
+// Karta startowa na stół: ostatnia karta talii, której nikt nie dostał w rozdaniu
 void generate_table_card()
 {
     for (int i = 0; i < SYMBOLS_PER_CARD; i++) {
-        table_card[i] = cards[0][i];
+        table_card[i] = cards[CARDS - 1][i];
     }
 }
 
-// Funkcja do wysyłania informacji o nowej karcie na stole do wszystkich klientów za każdym razem gdy trafiona karta jest przez klienta 
+// Rozsyła wszystkim nową kartę na stole (po każdym trafieniu)
 void broadcast_card_on_table(int *new_card) {
     char buffer[256]; 
     char temp[16];
@@ -155,13 +189,13 @@ void broadcast_card_on_table(int *new_card) {
     // Wysłanie do wszystkich
     for (int i = 0; i < MAX_CLIENTS; i++) {
         if (clients[i] != NULL) {
-            write(clients[i]->socket, buffer, strlen(buffer));
+            send_text(clients[i]->socket, buffer, strlen(buffer));
         }
     }
     
     pthread_mutex_unlock(&clients_mutex);
 }
-// czy katra graczy = karta na stole
+// Czy symbol jest na karcie na stole
 int symbol_matches_table(int symbol)
 {
     for(int i=0; i<SYMBOLS_PER_CARD; i++)
@@ -194,7 +228,7 @@ void *connection_handler(void *arg) {
 
     // --- HANDSHAKE 1: Nadanie ID ---
     sprintf(buffer, "WELCOME:%d\n", p->id);
-    write(p->socket, buffer, strlen(buffer));
+    send_text(p->socket, buffer, strlen(buffer));
    
    //oczekiwanie na maks graczy
     while(1) {
@@ -225,14 +259,14 @@ void *connection_handler(void *arg) {
     while ((read_size = recv(p->socket, buffer, sizeof(buffer) - 1, 0)) > 0) {
         buffer[read_size] = '\0';
       
-        // sprawdza info od gracza gracz odsyła tylko ifo o symbolu na karcie server trackuje na której jest i gra w pythonie tez powinna 
-        if (strncmp(buffer, "PLAY:", 5) == 0) {
+        // Gracz wysyła tylko symbol; serwer sam pilnuje, na której karcie gracz jest
+        if (strncmp(buffer, "PLAY:", 5) == 0 && !game_over) {
             int symbol = atoi(buffer + 5);
             int hit = 0;
             int card_to_broadcast[SYMBOLS_PER_CARD];
 
             pthread_mutex_lock(&clients_mutex);
-            if (symbol_matches_table(symbol) && symbol_matches_player_card(p, symbol)) {
+            if (!game_over && symbol_matches_table(symbol) && symbol_matches_player_card(p, symbol)) {
                 for (int i=0; i<SYMBOLS_PER_CARD; i++)
                 {
                     table_card[i]=player_cards[p->id][p->used_cards][i];
@@ -244,33 +278,31 @@ void *connection_handler(void *arg) {
             pthread_mutex_unlock(&clients_mutex);
 
             if (hit) {
+                send_text(p->socket, "HIT:\n", 5);
+                broadcast_card_on_table(card_to_broadcast);
+
                 if (p->used_cards >= CARDS_PER_PLAYER) {
                     char win_msg[64];
-                    sprintf(win_msg, "GAME_END:%d", p->id);
-                    
+                    sprintf(win_msg, "GAME_END:%d\n", p->id);
+                    printf("Koniec gry. Wygrywa gracz %d.\n", p->id);
+
                     // Powiadom wszystkich o końcu gry
                     pthread_mutex_lock(&clients_mutex);
+                    game_over = 1;
                     for (int i = 0; i < MAX_CLIENTS; i++) {
                         if (clients[i] != NULL) {
-                            write(clients[i]->socket, win_msg, strlen(win_msg));
+                            send_text(clients[i]->socket, win_msg, strlen(win_msg));
                         }
                     }
                     pthread_mutex_unlock(&clients_mutex);
-                    
-                    // Tutaj można dodać flagę kończącą pętle wątków
                 }
-                write(p->socket, "HIT:\n", 4);
-                broadcast_card_on_table(card_to_broadcast); 
             } else {
-                write(p->socket, "NOT_ON_TABLE:\n", 13);
+                send_text(p->socket, "NOT_ON_TABLE:\n", 14);
             }
         }
 
-        usleep(40000);
-        // Tymczasowy log dla testów
         printf("Gracz %d wysłał ruch: %s", p->id, buffer);
-        
-        memset(buffer, 0, 2048);
+        memset(buffer, 0, sizeof(buffer));
     }
 
     // Rozłączenie
@@ -289,7 +321,6 @@ void *connection_handler(void *arg) {
 
 int main() {
 
-    //to jest prawie to co w templatce ale dodałem tam logikę związaną z ograniczeniem liczby graczy tak o 
     int listenfd, connfd;
     struct sockaddr_in serv_addr;
     pthread_t thread_id;
@@ -324,9 +355,13 @@ int main() {
         return 1;
     }
 
+    // Talia generowana raz, przed przyjęciem graczy (brak wyścigu z wątkami klientów)
+    generate_dobble();
+    printf("Talia: %d kart, %d symboli na karcie, niepoprawnych par: %d\n",
+           CARDS, SYMBOLS_PER_CARD, verify_deck());
     printf("Serwer gry Double uruchomiony na porcie %d...\n", PORT);
 
-    int game_started=0; //wartownik
+    int game_started = 0;
 
     while (1) {
         connfd = accept(listenfd, (struct sockaddr *)NULL, NULL);
@@ -340,7 +375,7 @@ int main() {
         
         pthread_mutex_lock(&clients_mutex);
         
-        //czy mieści się gracz
+        // Szukamy wolnego miejsca
         int found_slot = -1;
         for (int i = 0; i < MAX_CLIENTS; i++) {
             if (clients[i] == NULL) {
@@ -350,8 +385,7 @@ int main() {
         }
             
         
-        // czy gra się zaczyna
-        if (found_slot != -1) {
+        if (found_slot != -1 && !game_started) {
             // Jest miejsce - tworzymy gracza
             player_t *new_player = malloc(sizeof(player_t));
             new_player->socket = connfd;
@@ -360,28 +394,25 @@ int main() {
             client_count++;
             new_player->used_cards = 0;
 
-            //tworzy wątek gracz
+            // Wątek obsługujący gracza
             pthread_create(&thread_id, NULL, connection_handler, (void *)new_player);
             pthread_detach(thread_id);
 
             // Informujemy wszystkich o nowym graczu
             should_broadcast_lobby = 1;
 
-            //rozpoczecie gry generacja kart dla graczy na stół i wysłanie kart
-            if (client_count == MAX_CLIENTS && !game_started) {
-
+            // Komplet graczy: start gry
+            if (client_count == MAX_CLIENTS) {
                 game_started = 1;
-                generate_dobble(); //generacja wszystkich kart
-
-                generate_table_card(); // generacja karty na stole
+                generate_table_card();
 
                 should_start_game = 1;
             }
         } 
         else {
-            // BRAK MIEJSCA
+            // Brak miejsca albo gra już trwa
             char *msg = "ERROR: Serwer jest pelny. Sprobuj pozniej.\n";
-            write(connfd, msg, strlen(msg));
+            send_text(connfd, msg, strlen(msg));
             close(connfd); // Rozłączamy klienta
             printf("Odrzucono połączenie: serwer pełny.\n");
         }

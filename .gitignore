@@ -1,1 +1,8 @@
-Game/_pycache_
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+Server/server
+Server/dobble_server
+.vscode/
+.idea/
